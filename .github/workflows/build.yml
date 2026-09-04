@@ -48,7 +48,7 @@ jobs:
         with:
           packages: >-
             build-tools;37.0.0
-            platforms;android-37
+            platforms;android-37.0
             ndk;27.3.13750724
             cmake;4.0.2
 
