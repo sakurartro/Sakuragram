@@ -3,21 +3,25 @@ import com.android.build.api.variant.FilterConfiguration
 plugins {
     id 'com.android.application'
     id 'com.google.gms.google-services'
-    id 'io.sentry.android.gradle'
 }
 
 dependencies {
     implementation project(':TMessagesProj')
 }
 
-sentry {
-    uploadNativeSymbols = true
-    includeSourceContext = true
-    additionalSourceDirsForSourceContext = [ '../TMessagesProj/src/main/java' ]
-    autoInstallation {
-        enabled = false
+// Sentry upload is optional for fork builds. Apply its Gradle plugin only when
+// credentials are deliberately provided through a local sentry.properties file.
+if (rootProject.file('sentry.properties').exists()) {
+    apply plugin: 'io.sentry.android.gradle'
+    sentry {
+        uploadNativeSymbols = true
+        includeSourceContext = true
+        additionalSourceDirsForSourceContext = [ '../TMessagesProj/src/main/java' ]
+        autoInstallation {
+            enabled = false
+        }
+        ignoredBuildTypes = ["debug"]
     }
-    ignoredBuildTypes = ["debug"]
 }
 
 android {
@@ -86,10 +90,14 @@ android {
     splits.abi {
         var buildingBundle = gradle.startParameter.taskNames.any { it.startsWith("bundle") }
         enable !buildingBundle
-        universalApk true
+        def requestedAbis = project.providers.gradleProperty("buildAbis")
+                .orElse("armeabi-v7a,arm64-v8a,x86,x86_64")
+                .get()
+                .split(",")
+        universalApk(requestedAbis.length > 1)
 
         reset()
-        include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        include(*requestedAbis)
     }
     namespace 'org.telegram.messenger.regular'
 
@@ -105,7 +113,7 @@ androidComponents {
             def abi = output.filters.find { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
             def abiName = abi ?: "universal"
             def baseVersionCode = output.versionCode.get()
-            output.outputFileName.set("Nekogram-${output.versionName.get()}-${baseVersionCode}-${abiName}.apk")
+            output.outputFileName.set("Sakuragram-${output.versionName.get()}-${baseVersionCode}-${abiName}.apk")
             output.versionCode.set(baseVersionCode * 10)
         }
     }

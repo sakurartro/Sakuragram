@@ -1,131 +1,134 @@
-name: Build
+name: Build Android APK
 
 on:
   push:
-    branches: [ "dev", "ci" ]
-    paths-ignore:
-      - '**.md'
-      - '.github/**'
-      - '!.github/workflows/build.yml'
-  workflow_call:
+    branches:
+      - main
   workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    name: Build arm64-v8a APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
     permissions:
-      id-token: write
-      attestations: write
-      artifact-metadata: write
+      contents: read
+
     env:
-      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
-      CCACHE_HARDLINK: "true"
-      CCACHE_NOHASHDIR: "true"
-      CCACHE_MAXSIZE: "10G"
+      API_ID: ${{ secrets.API_ID }}
+      API_HASH: ${{ secrets.API_HASH }}
+      GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+      KEYSTORE_JKS: ${{ secrets.KEYSTORE_JKS }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout sources and submodules
+        uses: actions/checkout@v7
         with:
-          submodules: true
+          submodules: recursive
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
-          java-version: '21'
-          distribution: 'temurin'
+          distribution: temurin
+          java-version: "21"
 
-      - name: Set up ccache
-        uses: Chocobo1/setup-ccache-action@v1
-        with:
-          remove_stale_cache: false
-
-      - name: Setup Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-read-only: false
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK, NDK and CMake
         uses: android-actions/setup-android@v4
         with:
-          packages: "build-tools;37.0.0 ndk;27.3.13750724 platforms;android-37.0"
+          packages: >-
+            build-tools;37.0.0
+            platforms;android-37
+            ndk;27.3.13750724
+            cmake;4.0.2
 
-      - name: Configure Gradle
+      - name: Check required secrets
+        shell: bash
         run: |
-          mkdir -p ~/.gradle
-          echo 'org.gradle.caching=true' >> ~/.gradle/gradle.properties
-          echo 'org.gradle.parallel=true' >> ~/.gradle/gradle.properties
-          echo 'org.gradle.jvmargs=-Xmx56g -Dfile.encoding=UTF-8 -XX:+UseParallelGC' >> ~/.gradle/gradle.properties
-          echo 'android.native.buildOutput=verbose' >> ~/.gradle/gradle.properties
+          missing=0
+          for name in API_ID API_HASH GOOGLE_SERVICES_JSON KEYSTORE_JKS KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::GitHub Actions secret $name is missing"
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+          if [[ ! "$API_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::API_ID must contain digits only"
+            exit 1
+          fi
+          if [[ ! "$API_HASH" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            echo "::error::API_HASH must contain 32 hexadecimal characters"
+            exit 1
+          fi
 
-      - name: Configure Signing
+      - name: Configure Firebase and signing
+        shell: bash
         run: |
-          echo "storeFile=${{ github.workspace }}/keystore.jks" >> local.properties
-          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> local.properties
-          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> local.properties
-          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> local.properties
-          
-          echo "${{ secrets.KEYSTORE_JKS }}" | base64 --decode > keystore.jks
+          printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > TMessagesProj_App/google-services.json
+          printf '%s' "$KEYSTORE_JKS" | base64 --decode > "$RUNNER_TEMP/sakuragram.jks"
 
-      - name: Configure Secrets
+          expected_package="$(awk -F= '$1 == "APP_PACKAGE" { print $2 }' gradle.properties)"
+          if ! jq -e --arg package "$expected_package" \
+            'any(.client[]; .client_info.android_client_info.package_name == $package)' \
+            TMessagesProj_App/google-services.json > /dev/null; then
+            echo "::error::google-services.json does not contain package $expected_package"
+            exit 1
+          fi
+
+          if ! keytool -list \
+            -keystore "$RUNNER_TEMP/sakuragram.jks" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" \
+            -keypass "$KEY_PASSWORD" > /dev/null; then
+            echo "::error::The keystore, passwords or key alias are invalid"
+            exit 1
+          fi
+
+          {
+            printf 'apiId=%s\n' "$API_ID"
+            printf 'apiHash=%s\n' "$API_HASH"
+            printf 'helperBotId=0\n'
+            printf 'helperBotUsername=\n'
+            printf 'sentryDsn=\n'
+            printf 'mapsApiKey=\n'
+            printf 'storeFile=%s\n' "$RUNNER_TEMP/sakuragram.jks"
+            printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+          } > local.properties
+
+      - name: Configure Gradle for an 8 GB runner
+        shell: bash
         run: |
-          echo "apiId=${{ secrets.API_ID }}" >> local.properties
-          echo "apiHash=${{ secrets.API_HASH }}" >> local.properties
-          echo "helperBotId=${{ secrets.HELPER_BOT_ID }}" >> local.properties
-          echo "helperBotUsername=${{ secrets.HELPER_BOT_USERNAME }}" >> local.properties
-          echo "sentryDsn=${{ secrets.SENTRY_DSN }}" >> local.properties
-          echo "mapsApiKey=${{ secrets.MAPS_API_KEY }}" >> local.properties
+          mkdir -p "$HOME/.gradle"
+          {
+            printf 'org.gradle.caching=true\n'
+            printf 'org.gradle.parallel=false\n'
+            printf 'org.gradle.workers.max=2\n'
+            printf 'org.gradle.jvmargs=-Xmx5g -Dfile.encoding=UTF-8 -XX:+UseParallelGC\n'
+          } >> "$HOME/.gradle/gradle.properties"
 
-          echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > TMessagesProj_App/google-services.json
-          echo "${{ secrets.SENTRY_PROPERTIES }}" | base64 --decode > sentry.properties
+      - name: Build signed arm64-v8a release APK
+        run: ./gradlew --no-daemon --stacktrace -PbuildAbis=arm64-v8a assembleRelease
 
-      - name: Build with Gradle
-        run: |
-          ./gradlew assembleRelease
-          ./gradlew bundlePlay
-          ./gradlew sentryUploadSourceBundlePlay
-
-      - name: Attest
-        uses: actions/attest@v4
-        with:
-          subject-path: '${{ github.workspace }}/TMessagesProj_App/build/outputs'
-
-      - name: Upload build artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
           name: outputs
-          path: TMessagesProj_App/build/outputs
-
-      - name: Upload arm64-v8a build apk
-        uses: actions/upload-artifact@v7
-        with:
-          path: TMessagesProj_App/build/outputs/apk/release/*-arm64-v8a.apk
-          archive: false
-
-      - name: Upload armeabi-v7a build apk
-        uses: actions/upload-artifact@v7
-        with:
-          path: TMessagesProj_App/build/outputs/apk/release/*-armeabi-v7a.apk
-          archive: false
-
-      - name: Upload universal build apk
-        uses: actions/upload-artifact@v7
-        with:
-          path: TMessagesProj_App/build/outputs/apk/release/*-universal.apk
-          archive: false
-
-      - name: Upload x86 build apk
-        uses: actions/upload-artifact@v7
-        with:
-          path: TMessagesProj_App/build/outputs/apk/release/*-x86.apk
-          archive: false
-
-      - name: Upload x86_64 build apk
-        uses: actions/upload-artifact@v7
-        with:
-          path: TMessagesProj_App/build/outputs/apk/release/*-x86_64.apk
-          archive: false
-
-      - name: Upload build bundle
-        uses: actions/upload-artifact@v7
-        with:
-          path: TMessagesProj_App/build/outputs/bundle/play/*-play.aab
-          archive: false
+          path: TMessagesProj_App/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
