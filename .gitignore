@@ -16,3 +16,6 @@ TMessagesProj_AppHuawei/afat/
 google-services.json
 sentry.properties
 TMessagesProj/jni/ffmpeg/build_android
+spotify_backend/.env
+spotify_backend/venv/
+spotify_backend/__pycache__/
