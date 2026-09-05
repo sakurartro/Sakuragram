@@ -71,6 +71,7 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SendMessagesHelper;
+import org.telegram.messenger.SpotifyController;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.messenger.voip.GroupCallMessage;
@@ -103,7 +104,7 @@ import me.vkryl.android.animator.ListAnimator;
 import me.vkryl.android.animator.ReplaceAnimator;
 import me.vkryl.core.lambda.Destroyable;
 
-public class FragmentContextView extends FrameLayout implements NotificationCenter.NotificationCenterDelegate, VoIPService.StateListener, GroupCallMessagesController.CallMessageListener  {
+public class FragmentContextView extends FrameLayout implements NotificationCenter.NotificationCenterDelegate, VoIPService.StateListener, GroupCallMessagesController.CallMessageListener, SpotifyController.Listener  {
     public final static int STYLE_NOT_SET = -1,
             STYLE_AUDIO_PLAYER = 0,
             STYLE_CONNECTING_GROUP_CALL = 1,
@@ -111,7 +112,8 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             STYLE_ACTIVE_GROUP_CALL = 3,
             STYLE_INACTIVE_GROUP_CALL = 4,
             STYLE_IMPORTING_MESSAGES = 5,
-            STYLE_LIVE_STORY = 6;
+            STYLE_LIVE_STORY = 6,
+            STYLE_SPOTIFY_PLAYER = 7;
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef({
@@ -122,13 +124,16 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             STYLE_ACTIVE_GROUP_CALL,
             STYLE_INACTIVE_GROUP_CALL,
             STYLE_IMPORTING_MESSAGES,
-            STYLE_LIVE_STORY
+            STYLE_LIVE_STORY,
+            STYLE_SPOTIFY_PLAYER
     })
     public @interface Style {}
 
     private final CapsuleBlobDrawable capsuleBlobDrawable = new CapsuleBlobDrawable();
     private ImageView playButton;
     private PlayPauseDrawable playPauseDrawable;
+    private PlayPauseDrawable telegramPlayPauseDrawable;
+    private PlayPauseDrawable spotifyPlayPauseDrawable;
     private AudioPlayerAlert.ClippingTextViewSwitcher titleTextView;
     private AudioPlayerAlert.ClippingTextViewSwitcher subtitleTextView;
     private AnimatorSet animatorSet;
@@ -164,6 +169,9 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     private int currentStyle = STYLE_NOT_SET;
     private String lastString;
     private boolean isMusic;
+    private SpotifyController.State spotifyState;
+    private boolean spotifyListenerRegistered;
+    private float spotifyTouchDownX;
     private boolean supportsCalls = true;
     private AvatarsImageView avatars;
 
@@ -409,11 +417,16 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         playButton = new ImageView(context);
         playButton.setScaleType(ImageView.ScaleType.CENTER);
         playButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_inappPlayerPlayPause), PorterDuff.Mode.MULTIPLY));
-        playButton.setImageDrawable(playPauseDrawable = new PlayPauseDrawable(16));
+        playButton.setImageDrawable(playPauseDrawable = telegramPlayPauseDrawable = new PlayPauseDrawable(16));
         playButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(14)));
         addView(playButton, LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.LEFT));
         playButton.setOnClickListener(v -> {
-            if (currentStyle == STYLE_AUDIO_PLAYER) {
+            if (currentStyle == STYLE_SPOTIFY_PLAYER && spotifyState != null) {
+                SpotifyController.Command command = spotifyState.playing
+                        ? SpotifyController.Command.PAUSE
+                        : SpotifyController.Command.PLAY;
+                SpotifyController.getInstance().send(command);
+            } else if (currentStyle == STYLE_AUDIO_PLAYER) {
                 if (MediaController.getInstance().isMessagePaused()) {
                     MediaController.getInstance().playMessage(MediaController.getInstance().getPlayingMessageObject());
                 } else {
@@ -700,7 +713,9 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         closeButton.setScaleType(ImageView.ScaleType.CENTER);
         addView(closeButton, LayoutHelper.createFrame(36, 36, Gravity.RIGHT | Gravity.TOP, 0, 0, 4, 0));
         closeButton.setOnClickListener(v -> {
-            if (currentStyle == STYLE_LIVE_LOCATION) {
+            if (currentStyle == STYLE_SPOTIFY_PLAYER) {
+                SpotifyController.getInstance().dismissCurrentState();
+            } else if (currentStyle == STYLE_LIVE_LOCATION) {
                 AlertDialog.Builder builder = new AlertDialog.Builder(fragment.getParentActivity(), resourcesProvider);
                 builder.setTitle(getString(R.string.StopLiveLocationAlertToTitle));
                 if (fragment instanceof DialogsActivity) {
@@ -843,6 +858,28 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         });
 
         setLeftMargin(leftMargin);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (currentStyle == STYLE_SPOTIFY_PLAYER) {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                spotifyTouchDownX = event.getX();
+            } else if (event.getAction() == MotionEvent.ACTION_UP) {
+                float distance = event.getX() - spotifyTouchDownX;
+                if (Math.abs(distance) >= dp(48)) {
+                    SpotifyController.Command command = distance < 0
+                            ? SpotifyController.Command.NEXT
+                            : SpotifyController.Command.PREVIOUS;
+                    if (SpotifyController.getInstance().canSend(command)) {
+                        SpotifyController.getInstance().send(command);
+                        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                        return true;
+                    }
+                }
+            }
+        }
+        return super.onTouchEvent(event);
     }
 
     private boolean slidingSpeed;
@@ -1081,9 +1118,9 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             if (VoIPService.getSharedInstance() != null && !VoIPService.getSharedInstance().isHangingUp() && VoIPService.getSharedInstance().getCallState() != VoIPService.STATE_WAITING_INCOMING) {
                 show = true;
                 startJoinFlickerAnimation();
-            } else if (chatActivity != null && fragment.getSendMessagesHelper().getImportingHistory(chatActivity.getDialogId()) != null && !isPlayingVoice()) {
+            } else if (chatActivity != null && fragment.getSendMessagesHelper().getImportingHistory(chatActivity.getDialogId()) != null) {
                 show = true;
-            } else if (chatActivity != null && chatActivity.getGroupCall() != null && chatActivity.getGroupCall().shouldShowPanel() && !GroupCallPip.isShowing() && !isPlayingVoice()) {
+            } else if (chatActivity != null && chatActivity.getGroupCall() != null && chatActivity.getGroupCall().shouldShowPanel() && !GroupCallPip.isShowing()) {
                 show = true;
                 startJoinFlickerAnimation();
             } else {
@@ -1241,10 +1278,79 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 playbackSpeedButton.setTag(null);
             }
             titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 36, Gravity.LEFT | Gravity.TOP, 35, 0, (isSideMenued ? 64 : 0) + 36, 0));
+        } else if (style == STYLE_SPOTIFY_PLAYER) {
+            selector.setBackground(Theme.getSelectorDrawable(false));
+            frameLayout.setBackgroundColor(0);
+            frameLayout.setTag(Theme.key_inappPlayerBackground);
+
+            joinButton.setVisibility(GONE);
+            closeButton.setVisibility(VISIBLE);
+            playButton.setVisibility(VISIBLE);
+            muteButton.setVisibility(GONE);
+            importingImageView.setVisibility(GONE);
+            importingImageView.stopAnimation();
+            avatars.setVisibility(GONE);
+            silentButton.setVisibility(GONE);
+            subtitleTextView.setVisibility(VISIBLE);
+            titleTextView.setTranslationX(0);
+            subtitleTextView.setTranslationX(0);
+            titleTextView.setPadding(0, 0, 0, 0);
+            subtitleTextView.setPadding(0, 0, 0, 0);
+
+            if (playbackSpeedButton != null) {
+                playbackSpeedButton.setVisibility(GONE);
+                playbackSpeedButton.setTag(null);
+            }
+
+            if (spotifyPlayPauseDrawable == null) {
+                spotifyPlayPauseDrawable = new PlayPauseDrawable(32);
+            }
+            playPauseDrawable = spotifyPlayPauseDrawable;
+            playButton.setImageDrawable(playPauseDrawable);
+            playButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(28)));
+            playButton.setLayoutParams(LayoutHelper.createFrame(72, 72, Gravity.TOP | Gravity.LEFT, 6, 0, 0, 0));
+
+            closeButton.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            closeButton.setPadding(dp(20), dp(20), dp(20), dp(20));
+            closeButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerClose) & 0x19ffffff, 1, dp(28)));
+            closeButton.setLayoutParams(LayoutHelper.createFrame(72, 72, Gravity.RIGHT | Gravity.TOP, 0, 0, 8, 0));
+            closeButton.setContentDescription(getString(R.string.AccDescrClosePlayer));
+
+            for (int i = 0; i < 2; i++) {
+                TextView title = i == 0 ? titleTextView.getTextView() : titleTextView.getNextTextView();
+                if (title != null) {
+                    title.setGravity(Gravity.BOTTOM | Gravity.LEFT);
+                    title.setTextColor(getThemedColor(Theme.key_inappPlayerTitle));
+                    title.setTypeface(Typeface.DEFAULT);
+                    title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 19);
+                    title.setEllipsize(TextUtils.TruncateAt.END);
+                }
+                TextView subtitle = i == 0 ? subtitleTextView.getTextView() : subtitleTextView.getNextTextView();
+                if (subtitle != null) {
+                    subtitle.setGravity(Gravity.TOP | Gravity.LEFT);
+                    subtitle.setTextColor(getThemedColor(Theme.key_inappPlayerClose));
+                    subtitle.setTypeface(AndroidUtilities.bold());
+                    subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
+                    subtitle.setEllipsize(TextUtils.TruncateAt.END);
+                }
+            }
+            titleTextView.setTag(Theme.key_inappPlayerTitle);
+            titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 32, Gravity.LEFT | Gravity.TOP, 76, 5, (isSideMenued ? 64 : 0) + 76, 0));
+            subtitleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 28, Gravity.LEFT | Gravity.TOP, 76, 39, (isSideMenued ? 64 : 0) + 76, 0));
         } else if (style == STYLE_AUDIO_PLAYER || style == STYLE_LIVE_LOCATION) {
             selector.setBackground(Theme.getSelectorDrawable(false));
             frameLayout.setBackgroundColor(0);
             frameLayout.setTag(Theme.key_inappPlayerBackground);
+
+            closeButton.setScaleType(ImageView.ScaleType.CENTER);
+            closeButton.setPadding(0, 0, 0, 0);
+            closeButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerClose) & 0x19ffffff, 1, dp(14)));
+            closeButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.RIGHT | Gravity.TOP, 0, 0, 4, 0));
+            playButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(14)));
+            playPauseDrawable = telegramPlayPauseDrawable;
+            if (style == STYLE_AUDIO_PLAYER) {
+                playButton.setImageDrawable(playPauseDrawable);
+            }
 
             subtitleTextView.setVisibility(GONE);
             joinButton.setVisibility(GONE);
@@ -1383,6 +1489,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
 
     @Override
     protected void onDetachedFromWindow() {
+        unregisterSpotifyListener();
         super.onDetachedFromWindow();
         if (animatorSet != null) {
             animatorSet.cancel();
@@ -1436,6 +1543,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.liveLocationsCacheChanged);
             checkLiveLocation(true);
         } else {
+            spotifyState = SpotifyController.getInstance().getState();
             for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
                 NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingDidReset);
                 NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingPlayStateChanged);
@@ -1458,13 +1566,15 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 checkLiveStory(true);
             } else if (VoIPService.getSharedInstance() != null && !VoIPService.getSharedInstance().isHangingUp() && VoIPService.getSharedInstance().getCallState() != VoIPService.STATE_WAITING_INCOMING && !GroupCallPip.isShowing()) {
                 checkCall(true);
-            } else if (chatActivity != null && fragment.getSendMessagesHelper().getImportingHistory(chatActivity.getDialogId()) != null && !isPlayingVoice()) {
+            } else if (chatActivity != null && fragment.getSendMessagesHelper().getImportingHistory(chatActivity.getDialogId()) != null) {
                 checkImport(true);
-            } else if (chatActivity != null && chatActivity.getGroupCall() != null && chatActivity.getGroupCall().shouldShowPanel() && !GroupCallPip.isShowing() && !isPlayingVoice()) {
+            } else if (chatActivity != null && chatActivity.getGroupCall() != null && chatActivity.getGroupCall().shouldShowPanel() && !GroupCallPip.isShowing()) {
                 checkCall(true);
             } else {
                 checkCall(true);
-                checkPlayer(true);
+                // Telegram voice/audio mini-player is intentionally disabled for now.
+                // checkTelegramPlayer(true);
+                checkSpotify(true);
                 updatePlaybackButton(false);
             }
         }
@@ -1495,6 +1605,45 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
 
         speakerAmplitude = 0;
         micAmplitude = 0;
+
+        if (!isLocation && getWindowVisibility() == VISIBLE) {
+            registerSpotifyListener();
+        }
+    }
+
+    @Override
+    protected void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
+        if (isLocation) {
+            return;
+        }
+        if (visibility == VISIBLE && isAttachedToWindow()) {
+            registerSpotifyListener();
+        } else {
+            unregisterSpotifyListener();
+        }
+    }
+
+    private void registerSpotifyListener() {
+        if (spotifyListenerRegistered) {
+            return;
+        }
+        spotifyListenerRegistered = true;
+        SpotifyController.getInstance().addListener(this);
+    }
+
+    private void unregisterSpotifyListener() {
+        if (!spotifyListenerRegistered) {
+            return;
+        }
+        spotifyListenerRegistered = false;
+        SpotifyController.getInstance().removeListener(this);
+    }
+
+    @Override
+    public void onSpotifyStateChanged(SpotifyController.State state) {
+        spotifyState = state;
+        checkSpotify(false);
     }
 
     @Override
@@ -1508,6 +1657,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             checkLiveLocation(false);
         } else if (id == NotificationCenter.liveStoryUpdated) {
             checkLiveStory(false);
+            checkSpotify(false);
         } else if (id == NotificationCenter.liveLocationsCacheChanged) {
             if (chatActivity != null) {
                 long did = (Long) args[0];
@@ -1519,9 +1669,12 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             if (currentStyle == STYLE_CONNECTING_GROUP_CALL || currentStyle == STYLE_ACTIVE_GROUP_CALL || currentStyle == STYLE_INACTIVE_GROUP_CALL) {
                 checkCall(false);
             }
-            checkPlayer(false);
+            // Telegram voice/audio mini-player is intentionally disabled for now.
+            // checkTelegramPlayer(false);
+            checkSpotify(false);
         } else if (id == NotificationCenter.didStartedCall || id == NotificationCenter.groupCallUpdated || id == NotificationCenter.groupCallVisibilityChanged) {
             checkCall(false);
+            checkSpotify(false);
             if (currentStyle == STYLE_ACTIVE_GROUP_CALL) {
                 VoIPService sharedInstance = VoIPService.getSharedInstance();
                 if (sharedInstance != null && sharedInstance.groupCall != null) {
@@ -1562,6 +1715,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 checkCall(false);
             }
             checkImport(false);
+            checkSpotify(false);
         } else if (id == NotificationCenter.messagePlayingSpeedChanged) {
             updatePlaybackButton(true);
         } else if (id == NotificationCenter.webRtcMicAmplitudeEvent) {
@@ -1597,6 +1751,9 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     float micAmplitude;
 
     public int getStyleHeight() {
+        if (currentStyle == STYLE_SPOTIFY_PLAYER) {
+            return 72;
+        }
         return currentStyle == STYLE_INACTIVE_GROUP_CALL ? 48 : 36;
     }
 
@@ -1807,7 +1964,182 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         titleTextView.setText(stringBuilder, false);
     }
 
-    private void checkPlayer(boolean create) {
+    private SpotifyController.State renderedSpotifyState;
+
+    private void checkSpotify(boolean create) {
+        if (isLocation) {
+            return;
+        }
+        if (visible && (currentStyle == STYLE_LIVE_STORY
+                || currentStyle == STYLE_CONNECTING_GROUP_CALL
+                || currentStyle == STYLE_ACTIVE_GROUP_CALL
+                || currentStyle == STYLE_INACTIVE_GROUP_CALL
+                || currentStyle == STYLE_IMPORTING_MESSAGES)) {
+            if (animatorSet != null) {
+                checkPlayerAfterAnimation = true;
+            }
+            return;
+        }
+
+        SpotifyController.State newState = spotifyState;
+        View fragmentView = fragment.getFragmentView();
+        if (!create && fragmentView != null) {
+            if (fragmentView.getParent() == null || ((View) fragmentView.getParent()).getVisibility() != VISIBLE) {
+                create = true;
+            }
+        }
+
+        boolean wasVisible = visible;
+        if (newState == null) {
+            renderedSpotifyState = null;
+            boolean callAvailable = supportsCalls
+                    && VoIPService.getSharedInstance() != null
+                    && !VoIPService.getSharedInstance().isHangingUp()
+                    && VoIPService.getSharedInstance().getCallState() != VoIPService.STATE_WAITING_INCOMING
+                    && !GroupCallPip.isShowing();
+            if (!callAvailable && chatActivity != null && !GroupCallPip.isShowing()) {
+                ChatObject.Call call = chatActivity.getGroupCall();
+                callAvailable = call != null && call.shouldShowPanel();
+            }
+            if (callAvailable) {
+                checkCall(false);
+                return;
+            }
+
+            if (currentStyle != STYLE_SPOTIFY_PLAYER && currentStyle != STYLE_NOT_SET) {
+                return;
+            }
+            if (visible) {
+                visible = false;
+                if (create) {
+                    if (getVisibility() != GONE) {
+                        setVisibility(GONE);
+                    }
+                    setTopPadding(0);
+                } else {
+                    if (animatorSet != null) {
+                        animatorSet.cancel();
+                        animatorSet = null;
+                    }
+                    notificationsLocker.lock();
+                    animatorSet = new AnimatorSet();
+                    animatorSet.playTogether(ObjectAnimator.ofFloat(this, "topPadding", 0));
+                    animatorSet.setDuration(200);
+                    if (delegate != null) {
+                        delegate.onAnimation(true, false);
+                    }
+                    animatorSet.addListener(new AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(Animator animation) {
+                            notificationsLocker.unlock();
+                            if (animatorSet != null && animatorSet.equals(animation)) {
+                                setVisibility(GONE);
+                                if (delegate != null) {
+                                    delegate.onAnimation(false, false);
+                                }
+                                animatorSet = null;
+                                if (checkLiveStoryAfterAnimation) {
+                                    checkLiveStory(false);
+                                } else if (checkCallAfterAnimation) {
+                                    checkCall(false);
+                                } else if (checkPlayerAfterAnimation) {
+                                    checkSpotify(false);
+                                } else if (checkImportAfterAnimation) {
+                                    checkImport(false);
+                                }
+                                checkLiveStoryAfterAnimation = false;
+                                checkCallAfterAnimation = false;
+                                checkPlayerAfterAnimation = false;
+                                checkImportAfterAnimation = false;
+                            }
+                        }
+                    });
+                    animatorSet.start();
+                }
+            } else if (currentStyle == STYLE_SPOTIFY_PLAYER || currentStyle == STYLE_NOT_SET) {
+                setVisibility(GONE);
+            }
+            return;
+        }
+
+        checkCreateView();
+        if (currentStyle != STYLE_SPOTIFY_PLAYER && animatorSet != null && !create) {
+            checkPlayerAfterAnimation = true;
+            return;
+        }
+
+        int previousStyle = currentStyle;
+        updateStyle(STYLE_SPOTIFY_PLAYER);
+        if (create && topPadding == 0) {
+            setTopPadding(AndroidUtilities.dp2(getStyleHeight()));
+            if (delegate != null) {
+                delegate.onAnimation(true, true);
+                delegate.onAnimation(false, true);
+            }
+        }
+        if (!visible) {
+            if (!create) {
+                if (animatorSet != null) {
+                    animatorSet.cancel();
+                    animatorSet = null;
+                }
+                notificationsLocker.lock();
+                animatorSet = new AnimatorSet();
+                if (delegate != null) {
+                    delegate.onAnimation(true, true);
+                }
+                animatorSet.playTogether(ObjectAnimator.ofFloat(this, "topPadding", AndroidUtilities.dp2(getStyleHeight())));
+                animatorSet.setDuration(200);
+                animatorSet.addListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        notificationsLocker.unlock();
+                        if (animatorSet != null && animatorSet.equals(animation)) {
+                            if (delegate != null) {
+                                delegate.onAnimation(false, true);
+                            }
+                            animatorSet = null;
+                            if (checkLiveStoryAfterAnimation) {
+                                checkLiveStory(false);
+                            } else if (checkCallAfterAnimation) {
+                                checkCall(false);
+                            } else if (checkPlayerAfterAnimation) {
+                                checkSpotify(false);
+                            } else if (checkImportAfterAnimation) {
+                                checkImport(false);
+                            }
+                            checkLiveStoryAfterAnimation = false;
+                            checkCallAfterAnimation = false;
+                            checkPlayerAfterAnimation = false;
+                            checkImportAfterAnimation = false;
+                        }
+                    }
+                });
+                animatorSet.start();
+            }
+            visible = true;
+            setVisibility(VISIBLE);
+        }
+
+        boolean animateContent = !create && wasVisible && previousStyle == STYLE_SPOTIFY_PLAYER;
+        playPauseDrawable.setPause(newState.playing, animateContent);
+        playButton.setContentDescription(getString(newState.playing ? R.string.AccActionPause : R.string.AccActionPlay));
+        SpotifyController.Command toggleCommand = newState.playing
+                ? SpotifyController.Command.PAUSE
+                : SpotifyController.Command.PLAY;
+        playButton.setEnabled(SpotifyController.getInstance().canSend(toggleCommand));
+
+        if (!newState.equals(renderedSpotifyState) || previousStyle != STYLE_SPOTIFY_PLAYER) {
+            renderedSpotifyState = newState;
+            titleTextView.setText(newState.songName, animateContent);
+            subtitleTextView.setText(newState.author, animateContent);
+            setContentDescription(newState.author + " - " + newState.songName);
+        }
+    }
+
+    /** Kept intact for an easy future rollback; its callers are disabled above. */
+    @SuppressWarnings("unused")
+    private void checkTelegramPlayer(boolean create) {
         if (visible && (currentStyle == STYLE_CONNECTING_GROUP_CALL || currentStyle == STYLE_ACTIVE_GROUP_CALL || (currentStyle == STYLE_INACTIVE_GROUP_CALL || currentStyle == STYLE_IMPORTING_MESSAGES) && !isPlayingVoice())) {
             return;
         }
@@ -1867,7 +2199,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkPlayer(false);
+                                    checkTelegramPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -1925,7 +2257,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkPlayer(false);
+                                    checkTelegramPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2015,7 +2347,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         }
 
         Dialog dialog = fragment.getVisibleDialog();
-        if ((isPlayingVoice() || chatActivity.shouldShowImport() || dialog instanceof ImportingAlert && !((ImportingAlert) dialog).isDismissed()) && importingHistory != null) {
+        if ((chatActivity.shouldShowImport() || dialog instanceof ImportingAlert && !((ImportingAlert) dialog).isDismissed()) && importingHistory != null) {
             importingHistory = null;
         }
 
@@ -2050,7 +2382,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkPlayer(false);
+                                    checkSpotify(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2107,7 +2439,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkPlayer(false);
+                                    checkSpotify(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2175,7 +2507,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkPlayer(false);
+                                    checkSpotify(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2249,7 +2581,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                             } else if (checkCallAfterAnimation) {
                                 checkCall(false);
                             } else if (checkPlayerAfterAnimation) {
-                                checkPlayer(false);
+                                checkSpotify(false);
                             } else if (checkImportAfterAnimation) {
                                 checkImport(false);
                             }
@@ -2300,7 +2632,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 callAvailable = false;
             }
             groupActive = false;
-            if (!isPlayingVoice() && !GroupCallActivity.groupCallUiVisible && supportsCalls && !callAvailable && chatActivity != null) {
+            if (!GroupCallActivity.groupCallUiVisible && supportsCalls && !callAvailable && chatActivity != null) {
                 ChatObject.Call call = chatActivity.getGroupCall();
                 if (call != null && call.shouldShowPanel()) {
                     callAvailable = true;
@@ -2340,7 +2672,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkPlayer(false);
+                                    checkSpotify(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2491,7 +2823,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                             } else if (checkCallAfterAnimation) {
                                 checkCall(false);
                             } else if (checkPlayerAfterAnimation) {
-                                checkPlayer(false);
+                                checkSpotify(false);
                             } else if (checkImportAfterAnimation) {
                                 checkImport(false);
                             }
