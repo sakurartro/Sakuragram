@@ -20,6 +20,10 @@ jobs:
       contents: read
 
     env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_HARDLINK: "true"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: "4G"
       API_ID: ${{ secrets.API_ID }}
       API_HASH: ${{ secrets.API_HASH }}
       GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
@@ -40,8 +44,15 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Restore native compiler cache
+        uses: Chocobo1/setup-ccache-action@v1
+        with:
+          remove_stale_cache: false
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: false
 
       - name: Set up Android SDK, NDK and CMake
         uses: android-actions/setup-android@v4
@@ -74,7 +85,7 @@ jobs:
             exit 1
           fi
 
-      - name: Configure Firebase and signing
+      - name: Configure Firebase, native integrity and signing
         shell: bash
         run: |
           printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > TMessagesProj_App/google-services.json
@@ -96,6 +107,26 @@ jobs:
             echo "::error::The keystore, passwords or key alias are invalid"
             exit 1
           fi
+
+          # The native loader intentionally rejects repackaged APKs. Keep its
+          # package and certificate values synchronized with this fork/signing key.
+          keytool -exportcert \
+            -keystore "$RUNNER_TEMP/sakuragram.jks" \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" \
+            -file "$RUNNER_TEMP/sakuragram-cert.der"
+          cert_size="$(wc -c < "$RUNNER_TEMP/sakuragram-cert.der")"
+          cert_crc="$(python3 -c 'import sys, zlib; print(hex(zlib.crc32(open(sys.argv[1], "rb").read())))' "$RUNNER_TEMP/sakuragram-cert.der")"
+          sed -i -E \
+            "s|^#define PACKAGE_NAME .*|#define PACKAGE_NAME \"$expected_package\"_iobfs.c_str()|" \
+            TMessagesProj/jni/colorado/colorado.h
+          sed -i -E \
+            "s|^#define CERT_HASH .*|#define CERT_HASH $cert_crc|" \
+            TMessagesProj/jni/colorado/colorado.h
+          printf -v cert_size_hex '0x%x' "$cert_size"
+          sed -i -E \
+            "s|^#define CERT_SIZE .*|#define CERT_SIZE $cert_size_hex|" \
+            TMessagesProj/jni/colorado/colorado.h
 
           {
             printf 'apiId=%s\n' "$API_ID"

@@ -378,7 +378,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
-                <data android:mimeType="vnd.android.cursor.item/vnd.tw.nekomimi.nekogram.android.profile"/>
+                <data android:mimeType="vnd.android.cursor.item/vnd.com.sakurartro.sakuragram.android.profile"/>
             </intent-filter>
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
@@ -422,8 +422,8 @@
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
-                <data android:mimeType="vnd.android.cursor.item/vnd.tw.nekomimi.nekogram.android.call"/>
-                <data android:mimeType="vnd.android.cursor.item/vnd.tw.nekomimi.nekogram.android.call.video"/>
+                <data android:mimeType="vnd.android.cursor.item/vnd.com.sakurartro.sakuragram.android.call"/>
+                <data android:mimeType="vnd.android.cursor.item/vnd.com.sakurartro.sakuragram.android.call.video"/>
             </intent-filter>
         </activity-alias>
         <activity

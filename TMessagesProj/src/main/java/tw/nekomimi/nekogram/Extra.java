@@ -25,7 +25,7 @@ public class Extra {
     };
 
     public static UserHelper.BotInfo getHelperBot() {
-        if (BuildConfig.HELPER_BOT_USERNAME == null) {
+        if (BuildConfig.HELPER_BOT_ID <= 0 || BuildConfig.HELPER_BOT_USERNAME == null || BuildConfig.HELPER_BOT_USERNAME.isEmpty()) {
             return null;
         }
         return HELPER_BOT;
@@ -36,6 +36,6 @@ public class Extra {
     }
 
     public static boolean isTrustedBot(long id) {
-        return id == BuildConfig.HELPER_BOT_ID;
+        return BuildConfig.HELPER_BOT_ID > 0 && id == BuildConfig.HELPER_BOT_ID;
     }
 }
