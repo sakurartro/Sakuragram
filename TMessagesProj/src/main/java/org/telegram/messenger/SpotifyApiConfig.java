@@ -1,12 +1,14 @@
 package org.telegram.messenger;
 
-/** Put your server endpoints here. Empty control URLs disable that action. */
+/** Edit this short file when the Spotify server API paths change. */
 public final class SpotifyApiConfig {
-    public static final String STATUS_URL = "http://10.248.199.130:8000/spotify/current";
-    public static final String PLAY_URL = "http://10.248.199.130:8000/spotify/current";
-    public static final String PAUSE_URL = "http://10.248.199.130:8000/spotify/current";
-    public static final String NEXT_URL = "";
-    public static final String PREVIOUS_URL = "";
+    public static final String DEFAULT_SERVER_ADDRESS = "http://10.20.104.130:8000";
+
+    public static final String STATUS_PATH = "/spotify/current";
+    public static final String PLAY_PATH = "/spotify/current";
+    public static final String PAUSE_PATH = "/spotify/current";
+    public static final String NEXT_PATH = "";
+    public static final String PREVIOUS_PATH = "";
 
     private SpotifyApiConfig() {}
 }

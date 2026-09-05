@@ -13,6 +13,9 @@
     <string name="DeleteAllFromSelfBefore">Before...</string>
     <string name="IgnoreBlocked">Hide messages from blocked user</string>
     <string name="Connection">Connection</string>
+    <string name="SpotifyServer">Spotify server</string>
+    <string name="SpotifyServerAddressHint">IP, host, or HTTP(S) address. Port 8000 is used when no port is specified.</string>
+    <string name="SpotifyServerAddressInvalid">Enter a valid HTTP or HTTPS server address</string>
     <string name="Chat">Chat</string>
     <string name="NameOrder">Name order</string>
     <string name="FirstLast">First Last</string>

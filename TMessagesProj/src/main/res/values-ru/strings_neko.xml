@@ -10,6 +10,9 @@
     <string name="DeleteAllFromSelfBefore">Раньше...</string>
     <string name="IgnoreBlocked">Скрыть заблокированных пользователей</string>
     <string name="Connection">Соединение</string>
+    <string name="SpotifyServer">Сервер Spotify</string>
+    <string name="SpotifyServerAddressHint">IP, имя хоста или HTTP(S)-адрес. Если порт не указан, используется 8000.</string>
+    <string name="SpotifyServerAddressInvalid">Введите корректный HTTP- или HTTPS-адрес сервера</string>
     <string name="Chat">Чат</string>
     <string name="NameOrder">Сортировка имён</string>
     <string name="FirstLast">Имя Фамилия</string>

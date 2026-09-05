@@ -1,15 +1,24 @@
 package tw.nekomimi.nekogram.settings;
 
+import android.text.InputType;
 import android.text.TextUtils;
+import android.view.Gravity;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
 
 import androidx.core.text.HtmlCompat;
 
+import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
+import org.telegram.messenger.SpotifyController;
+import org.telegram.messenger.SpotifyServerSettings;
 import org.telegram.messenger.UserConfig;
 import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.ui.ActionBar.AlertDialog;
+import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Cells.TextCheckCell;
+import org.telegram.ui.Components.EditTextBoldCursor;
 import org.telegram.ui.Components.ItemOptions;
 import org.telegram.ui.Components.UItem;
 import org.telegram.ui.Components.UniversalAdapter;
@@ -25,6 +34,7 @@ import tw.nekomimi.nekogram.translator.deepl.DeepLOAuth;
 public class NekoGeneralSettingsActivity extends BaseNekoSettingsActivity {
 
     private final int ipv6Row = rowId++;
+    private final int spotifyServerRow = rowId++;
 
     private final int showOriginalRow = rowId++;
     private final int translatorTypeRow = rowId++;
@@ -126,6 +136,7 @@ public class NekoGeneralSettingsActivity extends BaseNekoSettingsActivity {
     protected void fillItems(ArrayList<UItem> items, UniversalAdapter adapter) {
         items.add(UItem.asHeader(LocaleController.getString(R.string.Connection)));
         items.add(UItem.asCheck(ipv6Row, LocaleController.getString(R.string.PreferIPv6)).slug("ipv6").setChecked(NekoConfig.preferIPv6));
+        items.add(TextSettingsCellFactory.of(spotifyServerRow, LocaleController.getString(R.string.SpotifyServer), SpotifyServerSettings.getServerAddress()).slug("spotifyServer"));
         items.add(UItem.asShadow(null));
 
         items.add(UItem.asHeader(LocaleController.getString(R.string.Translator)));
@@ -183,6 +194,8 @@ public class NekoGeneralSettingsActivity extends BaseNekoSettingsActivity {
                     ConnectionsManager.getInstance(a).checkConnection();
                 }
             }
+        } else if (id == spotifyServerRow) {
+            showSpotifyServerDialog(item, position);
         } else if (id == disabledInstantCameraRow) {
             NekoConfig.toggleDisableInstantCamera();
             if (view instanceof TextCheckCell) {
@@ -323,6 +336,59 @@ public class NekoGeneralSettingsActivity extends BaseNekoSettingsActivity {
                 });
             }
         }
+    }
+
+    private void showSpotifyServerDialog(UItem item, int position) {
+        var context = getParentActivity();
+        if (context == null) {
+            return;
+        }
+
+        var editText = new EditTextBoldCursor(context);
+        editText.setText(SpotifyServerSettings.getServerAddress());
+        editText.setSelection(editText.length());
+        editText.setTextSize(16);
+        editText.setSingleLine(true);
+        editText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        editText.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        editText.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        editText.setTextColor(Theme.getColor(Theme.key_dialogTextBlack, resourcesProvider));
+        editText.setHintTextColor(Theme.getColor(Theme.key_dialogTextHint, resourcesProvider));
+        editText.setBackground(Theme.createEditTextDrawable(context, true));
+
+        var builder = new AlertDialog.Builder(context, resourcesProvider);
+        builder.setTitle(LocaleController.getString(R.string.SpotifyServer));
+        builder.setMessage(LocaleController.getString(R.string.SpotifyServerAddressHint));
+        builder.setView(editText);
+        builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
+        builder.setPositiveButton(LocaleController.getString(R.string.Save), null);
+
+        var dialog = builder.create();
+        showDialog(dialog);
+        var saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+        if (saveButton != null) {
+            saveButton.setOnClickListener(v -> {
+                String enteredAddress = editText.getText().toString();
+                if (!SpotifyServerSettings.setServerAddress(enteredAddress)) {
+                    editText.setError(LocaleController.getString(R.string.SpotifyServerAddressInvalid));
+                    return;
+                }
+                SpotifyController.getInstance().onServerAddressChanged();
+                item.textValue = SpotifyServerSettings.getServerAddress();
+                listView.adapter.notifyItemChanged(position, PARTIAL);
+                AndroidUtilities.hideKeyboard(editText);
+                dialog.dismiss();
+            });
+        }
+        editText.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE && saveButton != null) {
+                saveButton.callOnClick();
+                return true;
+            }
+            return false;
+        });
+        editText.requestFocus();
+        AndroidUtilities.showKeyboard(editText);
     }
 
     private void updateLanguageItems() {

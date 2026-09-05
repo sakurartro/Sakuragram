@@ -117,7 +117,7 @@ public final class SpotifyController {
             return;
         }
         listener.onSpotifyStateChanged(getState());
-        if (isConfigured(SpotifyApiConfig.STATUS_URL) && !polling) {
+        if (isConfigured(SpotifyServerSettings.getStatusUrl()) && !polling) {
             polling = true;
             requestState();
             scheduleNextPoll(POLL_INTERVAL_MS);
@@ -129,6 +129,27 @@ public final class SpotifyController {
         listeners.remove(listener);
         if (listeners.isEmpty()) {
             stopPolling();
+        }
+    }
+
+    /** Applies a server-address change immediately. Must be called on the main thread. */
+    public void onServerAddressChanged() {
+        if (stateCall != null) {
+            stateCall.cancel();
+            stateCall = null;
+        }
+        if (pollScheduled) {
+            AndroidUtilities.cancelRunOnUIThread(pollRunnable);
+            pollScheduled = false;
+        }
+        state = null;
+        dismissedState = null;
+        notifyListeners();
+
+        polling = !listeners.isEmpty() && isConfigured(SpotifyServerSettings.getStatusUrl());
+        if (polling) {
+            requestState();
+            scheduleNextPoll(POLL_INTERVAL_MS);
         }
     }
 
@@ -184,7 +205,7 @@ public final class SpotifyController {
     }
 
     private void requestState() {
-        String url = SpotifyApiConfig.STATUS_URL.trim();
+        String url = SpotifyServerSettings.getStatusUrl().trim();
         if (!polling || stateCall != null || url.isEmpty()) {
             return;
         }
@@ -295,10 +316,10 @@ public final class SpotifyController {
     @NonNull
     private static String getCommandUrl(@NonNull Command command) {
         return switch (command) {
-            case PLAY -> SpotifyApiConfig.PLAY_URL;
-            case PAUSE -> SpotifyApiConfig.PAUSE_URL;
-            case NEXT -> SpotifyApiConfig.NEXT_URL;
-            case PREVIOUS -> SpotifyApiConfig.PREVIOUS_URL;
+            case PLAY -> SpotifyServerSettings.getPlayUrl();
+            case PAUSE -> SpotifyServerSettings.getPauseUrl();
+            case NEXT -> SpotifyServerSettings.getNextUrl();
+            case PREVIOUS -> SpotifyServerSettings.getPreviousUrl();
         };
     }
 
