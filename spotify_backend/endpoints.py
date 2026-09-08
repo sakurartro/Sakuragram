@@ -1,55 +1,49 @@
-import secrets
-
+from fastapi import APIRouter, Depends, HTTPException
+from http_client import get_sesison
 import aiohttp
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
-
-from spotify_auth import create_login_url, exchange_code, get_access_token
-from spotify_current_data_requsts import get_current_spotify_data
+from models import CurrentData
+from access_token import get_latest_token
 
 router = APIRouter()
 
+@router.get("/spotify/current", response_model=CurrentData)
+async def get_current_song(session: aiohttp.ClientSession = Depends(get_sesison)):
+    headers = {"Authorization": f"Bearer {await get_latest_token()}"}
+    async with session.get("https://api.spotify.com/v1/me/player", headers=headers) as response:
+        if response.status == 204:
+            return CurrentData(playing=False, author="", song_name="")
+        if response.status != 200:
+            raise HTTPException(
+                status_code=response.status,
+                detail="Spotify playback state request failed",
+            )
 
-@router.get("/login")
-async def login():
-    try:
-        login_url, state = create_login_url()
-    except RuntimeError as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
-
-    response = RedirectResponse(login_url)
-    response.set_cookie(
-        "spotify_oauth_state",
-        state,
-        max_age=600,
-        httponly=True,
-        samesite="lax",
-    )
-    return response
-
-
-@router.get("/callback", response_class=HTMLResponse)
-async def callback(request: Request, code: str | None = None, state: str | None = None):
-    expected_state = request.cookies.get("spotify_oauth_state")
-    if not code or not state or not expected_state or not secrets.compare_digest(state, expected_state):
-        raise HTTPException(status_code=400, detail="Invalid Spotify OAuth callback")
-
-    timeout = aiohttp.ClientTimeout(total=30)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        try:
-            await exchange_code(session, code)
-        except RuntimeError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-
-    return "Spotify connected. You can close this page and open /api/current."
+        data = await response.json()
+        item = data.get("item") or {}
+        artists = item.get("artists") or []
+        return CurrentData(
+            playing=bool(data.get("is_playing", False)),
+            author=", ".join(
+                artist.get("name", "")
+                for artist in artists
+                if artist.get("name")
+            ),
+            song_name=item.get("name", ""),
+        )
 
 
-@router.get("/api/current")
-async def get_current_data():
-    access_token = get_access_token()
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Open /login and connect Spotify first")
+@router.get("/spotify/pause")
+async def pause_play(session: aiohttp.ClientSession = Depends(get_sesison)):
+    headers = {"Authorization": f"Bearer {await get_latest_token()}"}
+    async with session.put("https://api.spotify.com/v1/me/player/pause", headers=headers) as response:
+        if response.status != 200:
+            return response.status
+        return "OK"
 
-    timeout = aiohttp.ClientTimeout(total=30)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        return await get_current_spotify_data(session, access_token)
+@router.get("/spotify/play")
+async def resume_play(session: aiohttp.ClientSession = Depends(get_sesison)):
+    headers = {"Authorization": f"Bearer {await get_latest_token()}"}
+    async with session.put("https://api.spotify.com/v1/me/player/play", headers=headers) as response:
+        if response.status != 200:
+            return response.status
+        return "OK"
