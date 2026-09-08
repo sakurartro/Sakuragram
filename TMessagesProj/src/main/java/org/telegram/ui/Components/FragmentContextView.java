@@ -45,6 +45,7 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Button;
@@ -171,7 +172,14 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     private boolean isMusic;
     private SpotifyController.State spotifyState;
     private boolean spotifyListenerRegistered;
-    private float spotifyTouchDownX;
+    private static final int MEDIA_PAGE_SPOTIFY = 0;
+    private static final int MEDIA_PAGE_TELEGRAM = 1;
+    private int currentMediaPage = MEDIA_PAGE_SPOTIFY;
+    private View mediaPageIndicator;
+    private float mediaTouchDownX;
+    private float mediaTouchDownY;
+    private boolean mediaSwipeInProgress;
+    private final int mediaTouchSlop;
     private boolean supportsCalls = true;
     private AvatarsImageView avatars;
 
@@ -288,6 +296,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         super(context);
         this.resourcesProvider = resourcesProvider;
         this.isSideMenued = isSideMenued;
+        mediaTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
 
         fragment = parentFragment;
         if (parentFragment instanceof ChatActivityInterface) {
@@ -752,6 +761,26 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             }
         });
 
+        mediaPageIndicator = new View(context) {
+            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+            @Override
+            protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                float centerX = getWidth() / 2f;
+                float centerY = getHeight() / 2f;
+                for (int page = 0; page < 2; page++) {
+                    boolean selected = page == currentMediaPage;
+                    paint.setColor(getThemedColor(selected ? Theme.key_inappPlayerPlayPause : Theme.key_inappPlayerClose));
+                    paint.setAlpha(selected ? 255 : 120);
+                    canvas.drawCircle(centerX + dp(page == MEDIA_PAGE_SPOTIFY ? -4 : 4), centerY, dpf2(selected ? 2.2f : 1.6f), paint);
+                }
+            }
+        };
+        mediaPageIndicator.setVisibility(GONE);
+        mediaPageIndicator.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+        addView(mediaPageIndicator, LayoutHelper.createFrame(28, 10, Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM, 0, 0, 0, 1));
+
         groupCallMessagesContainer = new FrameLayout(getContext()) {
             @Override
             public boolean dispatchTouchEvent(MotionEvent ev) {
@@ -861,23 +890,58 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     }
 
     @Override
-    public boolean onTouchEvent(MotionEvent event) {
-        if (currentStyle == STYLE_SPOTIFY_PLAYER) {
-            if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                spotifyTouchDownX = event.getX();
-            } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                float distance = event.getX() - spotifyTouchDownX;
-                if (Math.abs(distance) >= dp(48)) {
-                    SpotifyController.Command command = distance < 0
-                            ? SpotifyController.Command.NEXT
-                            : SpotifyController.Command.PREVIOUS;
-                    if (SpotifyController.getInstance().canSend(command)) {
-                        SpotifyController.getInstance().send(command);
-                        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                        return true;
-                    }
-                }
+    public boolean onInterceptTouchEvent(MotionEvent event) {
+        if (!isMediaPlayerStyle(currentStyle)) {
+            return super.onInterceptTouchEvent(event);
+        }
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            mediaTouchDownX = event.getX();
+            mediaTouchDownY = event.getY();
+            mediaSwipeInProgress = false;
+        } else if (event.getAction() == MotionEvent.ACTION_MOVE) {
+            float dx = event.getX() - mediaTouchDownX;
+            float dy = event.getY() - mediaTouchDownY;
+            if (Math.abs(dx) > mediaTouchSlop && Math.abs(dx) > Math.abs(dy)) {
+                mediaSwipeInProgress = true;
+                return true;
             }
+        } else if (event.getAction() == MotionEvent.ACTION_CANCEL || event.getAction() == MotionEvent.ACTION_UP) {
+            mediaSwipeInProgress = false;
+        }
+        return super.onInterceptTouchEvent(event);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (!isMediaPlayerStyle(currentStyle)) {
+            return super.onTouchEvent(event);
+        }
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            mediaTouchDownX = event.getX();
+            mediaTouchDownY = event.getY();
+            mediaSwipeInProgress = false;
+            return true;
+        } else if (event.getAction() == MotionEvent.ACTION_MOVE) {
+            float dx = event.getX() - mediaTouchDownX;
+            float dy = event.getY() - mediaTouchDownY;
+            if (Math.abs(dx) > mediaTouchSlop && Math.abs(dx) > Math.abs(dy)) {
+                mediaSwipeInProgress = true;
+            }
+            return true;
+        } else if (event.getAction() == MotionEvent.ACTION_UP) {
+            float dx = event.getX() - mediaTouchDownX;
+            float dy = event.getY() - mediaTouchDownY;
+            boolean handled = mediaSwipeInProgress && Math.abs(dx) >= dp(36) && Math.abs(dx) > Math.abs(dy);
+            mediaSwipeInProgress = false;
+            if (handled) {
+                int targetPage = dx < 0 ? MEDIA_PAGE_TELEGRAM : MEDIA_PAGE_SPOTIFY;
+                if (switchMediaPage(targetPage, true)) {
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                }
+                return true;
+            }
+        } else if (event.getAction() == MotionEvent.ACTION_CANCEL) {
+            mediaSwipeInProgress = false;
         }
         return super.onTouchEvent(event);
     }
@@ -1050,6 +1114,9 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         }
         if (closeButton != null) {
             closeButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_inappPlayerClose), PorterDuff.Mode.MULTIPLY));
+        }
+        if (mediaPageIndicator != null) {
+            mediaPageIndicator.invalidate();
         }
         if (subtitleTextView != null) {
             for (int i = 0; i < 2; i++) {
@@ -1303,17 +1370,17 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             }
 
             if (spotifyPlayPauseDrawable == null) {
-                spotifyPlayPauseDrawable = new PlayPauseDrawable(32);
+                spotifyPlayPauseDrawable = new PlayPauseDrawable(21);
             }
             playPauseDrawable = spotifyPlayPauseDrawable;
             playButton.setImageDrawable(playPauseDrawable);
-            playButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(28)));
-            playButton.setLayoutParams(LayoutHelper.createFrame(72, 72, Gravity.TOP | Gravity.LEFT, 6, 0, 0, 0));
+            playButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(19)));
+            playButton.setLayoutParams(LayoutHelper.createFrame(48, 48, Gravity.TOP | Gravity.LEFT, 4, 0, 0, 0));
 
             closeButton.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            closeButton.setPadding(dp(20), dp(20), dp(20), dp(20));
-            closeButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerClose) & 0x19ffffff, 1, dp(28)));
-            closeButton.setLayoutParams(LayoutHelper.createFrame(72, 72, Gravity.RIGHT | Gravity.TOP, 0, 0, 8, 0));
+            closeButton.setPadding(dp(13), dp(13), dp(13), dp(13));
+            closeButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerClose) & 0x19ffffff, 1, dp(19)));
+            closeButton.setLayoutParams(LayoutHelper.createFrame(48, 48, Gravity.RIGHT | Gravity.TOP, 0, 0, 5, 0));
             closeButton.setContentDescription(getString(R.string.AccDescrClosePlayer));
 
             for (int i = 0; i < 2; i++) {
@@ -1322,7 +1389,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                     title.setGravity(Gravity.BOTTOM | Gravity.LEFT);
                     title.setTextColor(getThemedColor(Theme.key_inappPlayerTitle));
                     title.setTypeface(Typeface.DEFAULT);
-                    title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 19);
+                    title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13);
                     title.setEllipsize(TextUtils.TruncateAt.END);
                 }
                 TextView subtitle = i == 0 ? subtitleTextView.getTextView() : subtitleTextView.getNextTextView();
@@ -1330,13 +1397,13 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                     subtitle.setGravity(Gravity.TOP | Gravity.LEFT);
                     subtitle.setTextColor(getThemedColor(Theme.key_inappPlayerClose));
                     subtitle.setTypeface(AndroidUtilities.bold());
-                    subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
+                    subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10);
                     subtitle.setEllipsize(TextUtils.TruncateAt.END);
                 }
             }
             titleTextView.setTag(Theme.key_inappPlayerTitle);
-            titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 32, Gravity.LEFT | Gravity.TOP, 76, 5, (isSideMenued ? 64 : 0) + 76, 0));
-            subtitleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 28, Gravity.LEFT | Gravity.TOP, 76, 39, (isSideMenued ? 64 : 0) + 76, 0));
+            titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 21, Gravity.LEFT | Gravity.TOP, 51, 2, (isSideMenued ? 64 : 0) + 51, 0));
+            subtitleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 14, Gravity.LEFT | Gravity.TOP, 51, 24, (isSideMenued ? 64 : 0) + 51, 0));
         } else if (style == STYLE_AUDIO_PLAYER || style == STYLE_LIVE_LOCATION) {
             selector.setBackground(Theme.getSelectorDrawable(false));
             frameLayout.setBackgroundColor(0);
@@ -1350,6 +1417,8 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             playPauseDrawable = telegramPlayPauseDrawable;
             if (style == STYLE_AUDIO_PLAYER) {
                 playButton.setImageDrawable(playPauseDrawable);
+                titleTextView.setTranslationX(0);
+                subtitleTextView.setTranslationX(0);
             }
 
             subtitleTextView.setVisibility(GONE);
@@ -1485,6 +1554,8 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 playbackSpeedButton.setTag(null);
             }
         }
+        mediaPageIndicator.setVisibility(isMediaPlayerStyle(style) ? VISIBLE : GONE);
+        mediaPageIndicator.invalidate();
     }
 
     @Override
@@ -1572,9 +1643,8 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 checkCall(true);
             } else {
                 checkCall(true);
-                // Telegram voice/audio mini-player is intentionally disabled for now.
-                // checkTelegramPlayer(true);
-                checkSpotify(true);
+                currentMediaPage = isTelegramAudioPlaying() ? MEDIA_PAGE_TELEGRAM : MEDIA_PAGE_SPOTIFY;
+                checkMediaPlayer(true);
                 updatePlaybackButton(false);
             }
         }
@@ -1643,7 +1713,10 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     @Override
     public void onSpotifyStateChanged(SpotifyController.State state) {
         spotifyState = state;
-        checkSpotify(false);
+        if (state != null && state.playing && !isTelegramAudioPlaying()) {
+            currentMediaPage = MEDIA_PAGE_SPOTIFY;
+        }
+        checkMediaPlayer(false);
     }
 
     @Override
@@ -1657,7 +1730,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             checkLiveLocation(false);
         } else if (id == NotificationCenter.liveStoryUpdated) {
             checkLiveStory(false);
-            checkSpotify(false);
+            checkMediaPlayer(false);
         } else if (id == NotificationCenter.liveLocationsCacheChanged) {
             if (chatActivity != null) {
                 long did = (Long) args[0];
@@ -1669,12 +1742,21 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             if (currentStyle == STYLE_CONNECTING_GROUP_CALL || currentStyle == STYLE_ACTIVE_GROUP_CALL || currentStyle == STYLE_INACTIVE_GROUP_CALL) {
                 checkCall(false);
             }
-            // Telegram voice/audio mini-player is intentionally disabled for now.
-            // checkTelegramPlayer(false);
-            checkSpotify(false);
+            if (id == NotificationCenter.messagePlayingDidStart && getTelegramPlayerMessage() != null) {
+                currentMediaPage = MEDIA_PAGE_TELEGRAM;
+            } else if (id == NotificationCenter.messagePlayingPlayStateChanged) {
+                if (isTelegramAudioPlaying()) {
+                    currentMediaPage = MEDIA_PAGE_TELEGRAM;
+                } else if (spotifyState != null && spotifyState.playing) {
+                    currentMediaPage = MEDIA_PAGE_SPOTIFY;
+                }
+            } else if (id == NotificationCenter.messagePlayingDidReset && spotifyState != null) {
+                currentMediaPage = MEDIA_PAGE_SPOTIFY;
+            }
+            checkMediaPlayer(false);
         } else if (id == NotificationCenter.didStartedCall || id == NotificationCenter.groupCallUpdated || id == NotificationCenter.groupCallVisibilityChanged) {
             checkCall(false);
-            checkSpotify(false);
+            checkMediaPlayer(false);
             if (currentStyle == STYLE_ACTIVE_GROUP_CALL) {
                 VoIPService sharedInstance = VoIPService.getSharedInstance();
                 if (sharedInstance != null && sharedInstance.groupCall != null) {
@@ -1715,7 +1797,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 checkCall(false);
             }
             checkImport(false);
-            checkSpotify(false);
+            checkMediaPlayer(false);
         } else if (id == NotificationCenter.messagePlayingSpeedChanged) {
             updatePlaybackButton(true);
         } else if (id == NotificationCenter.webRtcMicAmplitudeEvent) {
@@ -1751,8 +1833,8 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     float micAmplitude;
 
     public int getStyleHeight() {
-        if (currentStyle == STYLE_SPOTIFY_PLAYER) {
-            return 72;
+        if (isMediaPlayerStyle(currentStyle)) {
+            return 48;
         }
         return currentStyle == STYLE_INACTIVE_GROUP_CALL ? 48 : 36;
     }
@@ -1964,6 +2046,83 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         titleTextView.setText(stringBuilder, false);
     }
 
+    private boolean isMediaPlayerStyle(@Style int style) {
+        return style == STYLE_SPOTIFY_PLAYER || style == STYLE_AUDIO_PLAYER;
+    }
+
+    private MessageObject getTelegramPlayerMessage() {
+        MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+        if (messageObject == null || messageObject.getId() == 0 || messageObject.isVideo()) {
+            return null;
+        }
+        return messageObject;
+    }
+
+    private boolean isTelegramAudioPlaying() {
+        return getTelegramPlayerMessage() != null && !MediaController.getInstance().isMessagePaused();
+    }
+
+    private boolean switchMediaPage(int targetPage, boolean animate) {
+        if (targetPage == currentMediaPage) {
+            return false;
+        }
+        if (targetPage == MEDIA_PAGE_SPOTIFY && spotifyState == null) {
+            return false;
+        }
+        if (targetPage == MEDIA_PAGE_TELEGRAM && getTelegramPlayerMessage() == null) {
+            return false;
+        }
+        int direction = targetPage > currentMediaPage ? 1 : -1;
+        currentMediaPage = targetPage;
+        checkMediaPlayer(false);
+        if (mediaPageIndicator != null) {
+            mediaPageIndicator.invalidate();
+        }
+        if (animate) {
+            animateMediaPageChange(direction);
+        }
+        return true;
+    }
+
+    private void animateMediaPageChange(int direction) {
+        float offset = dp(direction > 0 ? 18 : -18);
+        View[] contentViews = new View[] { playButton, titleTextView, subtitleTextView, closeButton, playbackSpeedButton, silentButton };
+        for (View view : contentViews) {
+            if (view == null || view.getVisibility() != VISIBLE) {
+                continue;
+            }
+            view.animate().cancel();
+            view.setTranslationX(offset);
+            view.setAlpha(0.65f);
+            view.animate().translationX(0).alpha(1f).setDuration(160).start();
+        }
+    }
+
+    private void checkMediaPlayer(boolean create) {
+        boolean spotifyAvailable = spotifyState != null;
+        boolean telegramAvailable = getTelegramPlayerMessage() != null;
+
+        if (currentMediaPage == MEDIA_PAGE_SPOTIFY && spotifyAvailable) {
+            checkSpotify(create);
+        } else if (currentMediaPage == MEDIA_PAGE_TELEGRAM && telegramAvailable) {
+            checkTelegramPlayer(create);
+        } else if (spotifyAvailable) {
+            currentMediaPage = MEDIA_PAGE_SPOTIFY;
+            checkSpotify(create);
+        } else if (telegramAvailable) {
+            currentMediaPage = MEDIA_PAGE_TELEGRAM;
+            checkTelegramPlayer(create);
+        } else if (currentStyle == STYLE_AUDIO_PLAYER) {
+            checkTelegramPlayer(create);
+        } else {
+            checkSpotify(create);
+        }
+
+        if (mediaPageIndicator != null) {
+            mediaPageIndicator.invalidate();
+        }
+    }
+
     private SpotifyController.State renderedSpotifyState;
 
     private void checkSpotify(boolean create) {
@@ -2043,7 +2202,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkSpotify(false);
+                                    checkMediaPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2104,7 +2263,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                             } else if (checkCallAfterAnimation) {
                                 checkCall(false);
                             } else if (checkPlayerAfterAnimation) {
-                                checkSpotify(false);
+                                checkMediaPlayer(false);
                             } else if (checkImportAfterAnimation) {
                                 checkImport(false);
                             }
@@ -2137,13 +2296,11 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         }
     }
 
-    /** Kept intact for an easy future rollback; its callers are disabled above. */
-    @SuppressWarnings("unused")
     private void checkTelegramPlayer(boolean create) {
-        if (visible && (currentStyle == STYLE_CONNECTING_GROUP_CALL || currentStyle == STYLE_ACTIVE_GROUP_CALL || (currentStyle == STYLE_INACTIVE_GROUP_CALL || currentStyle == STYLE_IMPORTING_MESSAGES) && !isPlayingVoice())) {
+        if (visible && (currentStyle == STYLE_LIVE_STORY || currentStyle == STYLE_CONNECTING_GROUP_CALL || currentStyle == STYLE_ACTIVE_GROUP_CALL || (currentStyle == STYLE_INACTIVE_GROUP_CALL || currentStyle == STYLE_IMPORTING_MESSAGES) && !isPlayingVoice())) {
             return;
         }
-        MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+        MessageObject messageObject = getTelegramPlayerMessage();
         View fragmentView = fragment.getFragmentView();
         if (!create && fragmentView != null) {
             if (fragmentView.getParent() == null || ((View) fragmentView.getParent()).getVisibility() != VISIBLE) {
@@ -2151,7 +2308,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             }
         }
         boolean wasVisible = visible;
-        if (messageObject == null || messageObject.getId() == 0 || messageObject.isVideo()) {
+        if (messageObject == null) {
             lastMessageObject = null;
             boolean callAvailable = supportsCalls && VoIPService.getSharedInstance() != null && !VoIPService.getSharedInstance().isHangingUp() && VoIPService.getSharedInstance().getCallState() != VoIPService.STATE_WAITING_INCOMING && !GroupCallPip.isShowing();
             if (!isPlayingVoice() && !callAvailable && chatActivity != null && !GroupCallPip.isShowing()) {
@@ -2199,7 +2356,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkTelegramPlayer(false);
+                                    checkMediaPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2257,7 +2414,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkTelegramPlayer(false);
+                                    checkMediaPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2382,7 +2539,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkSpotify(false);
+                                    checkMediaPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2439,7 +2596,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkSpotify(false);
+                                    checkMediaPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2507,7 +2664,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkSpotify(false);
+                                    checkMediaPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2581,7 +2738,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                             } else if (checkCallAfterAnimation) {
                                 checkCall(false);
                             } else if (checkPlayerAfterAnimation) {
-                                checkSpotify(false);
+                                checkMediaPlayer(false);
                             } else if (checkImportAfterAnimation) {
                                 checkImport(false);
                             }
@@ -2672,7 +2829,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                                 } else if (checkCallAfterAnimation) {
                                     checkCall(false);
                                 } else if (checkPlayerAfterAnimation) {
-                                    checkSpotify(false);
+                                    checkMediaPlayer(false);
                                 } else if (checkImportAfterAnimation) {
                                     checkImport(false);
                                 }
@@ -2823,7 +2980,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                             } else if (checkCallAfterAnimation) {
                                 checkCall(false);
                             } else if (checkPlayerAfterAnimation) {
-                                checkSpotify(false);
+                                checkMediaPlayer(false);
                             } else if (checkImportAfterAnimation) {
                                 checkImport(false);
                             }
