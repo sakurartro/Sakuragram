@@ -45,7 +45,6 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Button;
@@ -175,11 +174,10 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     private static final int MEDIA_PAGE_SPOTIFY = 0;
     private static final int MEDIA_PAGE_TELEGRAM = 1;
     private int currentMediaPage = MEDIA_PAGE_SPOTIFY;
-    private View mediaPageIndicator;
-    private float mediaTouchDownX;
-    private float mediaTouchDownY;
-    private boolean mediaSwipeInProgress;
-    private final int mediaTouchSlop;
+    private BackupImageView spotifyCoverView;
+    private RLottieImageView previousTrackButton;
+    private RLottieImageView nextTrackButton;
+    private TextView mediaModeButton;
     private boolean supportsCalls = true;
     private AvatarsImageView avatars;
 
@@ -296,7 +294,6 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         super(context);
         this.resourcesProvider = resourcesProvider;
         this.isSideMenued = isSideMenued;
-        mediaTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
 
         fragment = parentFragment;
         if (parentFragment instanceof ChatActivityInterface) {
@@ -423,6 +420,12 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         selector = new View(context);
         frameLayout.addView(selector, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
+        spotifyCoverView = new BackupImageView(context);
+        spotifyCoverView.setRoundRadius(dp(6));
+        spotifyCoverView.setBackground(Theme.createRoundRectDrawable(dp(6), getThemedColor(Theme.key_inappPlayerClose) & 0x1fffffff));
+        spotifyCoverView.setVisibility(GONE);
+        addView(spotifyCoverView, LayoutHelper.createFrame(52, 52, Gravity.TOP | Gravity.LEFT, 6, 4, 0, 0));
+
         playButton = new ImageView(context);
         playButton.setScaleType(ImageView.ScaleType.CENTER);
         playButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_inappPlayerPlayPause), PorterDuff.Mode.MULTIPLY));
@@ -442,6 +445,47 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                     MediaController.getInstance().pauseMessage(MediaController.getInstance().getPlayingMessageObject());
                 }
             }
+        });
+
+        previousTrackButton = new RLottieImageView(context);
+        previousTrackButton.setScaleType(ImageView.ScaleType.CENTER);
+        previousTrackButton.setAnimation(R.raw.player_prev, 20, 20);
+        previousTrackButton.setLayerColor("Triangle 3", getThemedColor(Theme.key_inappPlayerPlayPause));
+        previousTrackButton.setLayerColor("Triangle 4", getThemedColor(Theme.key_inappPlayerPlayPause));
+        previousTrackButton.setLayerColor("Rectangle 4", getThemedColor(Theme.key_inappPlayerPlayPause));
+        previousTrackButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(18)));
+        previousTrackButton.setContentDescription(getString(R.string.AccDescrPrevious));
+        previousTrackButton.setVisibility(GONE);
+        addView(previousTrackButton, LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.RIGHT));
+        previousTrackButton.setOnClickListener(v -> {
+            if (currentStyle == STYLE_SPOTIFY_PLAYER) {
+                SpotifyController.getInstance().send(SpotifyController.Command.PREVIOUS);
+            } else if (currentStyle == STYLE_AUDIO_PLAYER) {
+                MediaController.getInstance().playPreviousMessage();
+            }
+            previousTrackButton.setProgress(0f);
+            previousTrackButton.playAnimation();
+        });
+
+        nextTrackButton = new RLottieImageView(context);
+        nextTrackButton.setScaleType(ImageView.ScaleType.CENTER);
+        nextTrackButton.setAnimation(R.raw.player_prev, 20, 20);
+        nextTrackButton.setLayerColor("Triangle 3", getThemedColor(Theme.key_inappPlayerPlayPause));
+        nextTrackButton.setLayerColor("Triangle 4", getThemedColor(Theme.key_inappPlayerPlayPause));
+        nextTrackButton.setLayerColor("Rectangle 4", getThemedColor(Theme.key_inappPlayerPlayPause));
+        nextTrackButton.setRotation(180f);
+        nextTrackButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(18)));
+        nextTrackButton.setContentDescription(getString(R.string.Next));
+        nextTrackButton.setVisibility(GONE);
+        addView(nextTrackButton, LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.RIGHT));
+        nextTrackButton.setOnClickListener(v -> {
+            if (currentStyle == STYLE_SPOTIFY_PLAYER) {
+                SpotifyController.getInstance().send(SpotifyController.Command.NEXT);
+            } else if (currentStyle == STYLE_AUDIO_PLAYER) {
+                MediaController.getInstance().playNextMessage();
+            }
+            nextTrackButton.setProgress(0f);
+            nextTrackButton.playAnimation();
         });
 
         importingImageView = new RLottieImageView(context);
@@ -761,25 +805,22 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             }
         });
 
-        mediaPageIndicator = new View(context) {
-            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-            @Override
-            protected void onDraw(Canvas canvas) {
-                super.onDraw(canvas);
-                float centerX = getWidth() / 2f;
-                float centerY = getHeight() / 2f;
-                for (int page = 0; page < 2; page++) {
-                    boolean selected = page == currentMediaPage;
-                    paint.setColor(getThemedColor(selected ? Theme.key_inappPlayerPlayPause : Theme.key_inappPlayerClose));
-                    paint.setAlpha(selected ? 255 : 120);
-                    canvas.drawCircle(centerX + dp(page == MEDIA_PAGE_SPOTIFY ? -4 : 4), centerY, dpf2(selected ? 2.2f : 1.6f), paint);
-                }
+        mediaModeButton = new TextView(context);
+        mediaModeButton.setGravity(Gravity.CENTER);
+        mediaModeButton.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 11);
+        mediaModeButton.setTypeface(AndroidUtilities.bold());
+        mediaModeButton.setTextColor(getThemedColor(Theme.key_inappPlayerPlayPause));
+        mediaModeButton.setMinWidth(dp(88));
+        mediaModeButton.setPadding(dp(10), 0, dp(10), 0);
+        mediaModeButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(10)));
+        mediaModeButton.setVisibility(GONE);
+        addView(mediaModeButton, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, 20, Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM, 0, 0, 0, 1));
+        mediaModeButton.setOnClickListener(v -> {
+            int targetPage = currentMediaPage == MEDIA_PAGE_SPOTIFY ? MEDIA_PAGE_TELEGRAM : MEDIA_PAGE_SPOTIFY;
+            if (switchMediaPage(targetPage, true)) {
+                performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             }
-        };
-        mediaPageIndicator.setVisibility(GONE);
-        mediaPageIndicator.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-        addView(mediaPageIndicator, LayoutHelper.createFrame(28, 10, Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM, 0, 0, 0, 1));
+        });
 
         groupCallMessagesContainer = new FrameLayout(getContext()) {
             @Override
@@ -887,63 +928,6 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         });
 
         setLeftMargin(leftMargin);
-    }
-
-    @Override
-    public boolean onInterceptTouchEvent(MotionEvent event) {
-        if (!isMediaPlayerStyle(currentStyle)) {
-            return super.onInterceptTouchEvent(event);
-        }
-        if (event.getAction() == MotionEvent.ACTION_DOWN) {
-            mediaTouchDownX = event.getX();
-            mediaTouchDownY = event.getY();
-            mediaSwipeInProgress = false;
-        } else if (event.getAction() == MotionEvent.ACTION_MOVE) {
-            float dx = event.getX() - mediaTouchDownX;
-            float dy = event.getY() - mediaTouchDownY;
-            if (Math.abs(dx) > mediaTouchSlop && Math.abs(dx) > Math.abs(dy)) {
-                mediaSwipeInProgress = true;
-                return true;
-            }
-        } else if (event.getAction() == MotionEvent.ACTION_CANCEL || event.getAction() == MotionEvent.ACTION_UP) {
-            mediaSwipeInProgress = false;
-        }
-        return super.onInterceptTouchEvent(event);
-    }
-
-    @Override
-    public boolean onTouchEvent(MotionEvent event) {
-        if (!isMediaPlayerStyle(currentStyle)) {
-            return super.onTouchEvent(event);
-        }
-        if (event.getAction() == MotionEvent.ACTION_DOWN) {
-            mediaTouchDownX = event.getX();
-            mediaTouchDownY = event.getY();
-            mediaSwipeInProgress = false;
-            return true;
-        } else if (event.getAction() == MotionEvent.ACTION_MOVE) {
-            float dx = event.getX() - mediaTouchDownX;
-            float dy = event.getY() - mediaTouchDownY;
-            if (Math.abs(dx) > mediaTouchSlop && Math.abs(dx) > Math.abs(dy)) {
-                mediaSwipeInProgress = true;
-            }
-            return true;
-        } else if (event.getAction() == MotionEvent.ACTION_UP) {
-            float dx = event.getX() - mediaTouchDownX;
-            float dy = event.getY() - mediaTouchDownY;
-            boolean handled = mediaSwipeInProgress && Math.abs(dx) >= dp(36) && Math.abs(dx) > Math.abs(dy);
-            mediaSwipeInProgress = false;
-            if (handled) {
-                int targetPage = dx < 0 ? MEDIA_PAGE_TELEGRAM : MEDIA_PAGE_SPOTIFY;
-                if (switchMediaPage(targetPage, true)) {
-                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                }
-                return true;
-            }
-        } else if (event.getAction() == MotionEvent.ACTION_CANCEL) {
-            mediaSwipeInProgress = false;
-        }
-        return super.onTouchEvent(event);
     }
 
     private boolean slidingSpeed;
@@ -1115,8 +1099,25 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         if (closeButton != null) {
             closeButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_inappPlayerClose), PorterDuff.Mode.MULTIPLY));
         }
-        if (mediaPageIndicator != null) {
-            mediaPageIndicator.invalidate();
+        if (spotifyCoverView != null) {
+            spotifyCoverView.setBackground(Theme.createRoundRectDrawable(dp(6), getThemedColor(Theme.key_inappPlayerClose) & 0x1fffffff));
+        }
+        int mediaControlColor = getThemedColor(Theme.key_inappPlayerPlayPause);
+        if (previousTrackButton != null) {
+            previousTrackButton.setLayerColor("Triangle 3", mediaControlColor);
+            previousTrackButton.setLayerColor("Triangle 4", mediaControlColor);
+            previousTrackButton.setLayerColor("Rectangle 4", mediaControlColor);
+            previousTrackButton.setBackground(Theme.createSelectorDrawable(mediaControlColor & 0x19ffffff, 1, dp(18)));
+        }
+        if (nextTrackButton != null) {
+            nextTrackButton.setLayerColor("Triangle 3", mediaControlColor);
+            nextTrackButton.setLayerColor("Triangle 4", mediaControlColor);
+            nextTrackButton.setLayerColor("Rectangle 4", mediaControlColor);
+            nextTrackButton.setBackground(Theme.createSelectorDrawable(mediaControlColor & 0x19ffffff, 1, dp(18)));
+        }
+        if (mediaModeButton != null) {
+            mediaModeButton.setTextColor(mediaControlColor);
+            mediaModeButton.setBackground(Theme.createSelectorDrawable(mediaControlColor & 0x19ffffff, 1, dp(10)));
         }
         if (subtitleTextView != null) {
             for (int i = 0; i < 2; i++) {
@@ -1280,6 +1281,10 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         if (style != STYLE_INACTIVE_GROUP_CALL) {
             notifyButtonEnabled = false;
         }
+        spotifyCoverView.setVisibility(GONE);
+        previousTrackButton.setVisibility(GONE);
+        nextTrackButton.setVisibility(GONE);
+        mediaModeButton.setVisibility(GONE);
 
         if (avatars != null) {
             avatars.setStyle(currentStyle);
@@ -1359,6 +1364,10 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             avatars.setVisibility(GONE);
             silentButton.setVisibility(GONE);
             subtitleTextView.setVisibility(VISIBLE);
+            spotifyCoverView.setVisibility(VISIBLE);
+            previousTrackButton.setVisibility(VISIBLE);
+            nextTrackButton.setVisibility(VISIBLE);
+            mediaModeButton.setVisibility(VISIBLE);
             titleTextView.setTranslationX(0);
             subtitleTextView.setTranslationX(0);
             titleTextView.setPadding(0, 0, 0, 0);
@@ -1370,17 +1379,19 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             }
 
             if (spotifyPlayPauseDrawable == null) {
-                spotifyPlayPauseDrawable = new PlayPauseDrawable(21);
+                spotifyPlayPauseDrawable = new PlayPauseDrawable(24);
             }
             playPauseDrawable = spotifyPlayPauseDrawable;
             playButton.setImageDrawable(playPauseDrawable);
-            playButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(19)));
-            playButton.setLayoutParams(LayoutHelper.createFrame(48, 48, Gravity.TOP | Gravity.LEFT, 4, 0, 0, 0));
+            playButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerPlayPause) & 0x19ffffff, 1, dp(20)));
+            playButton.setLayoutParams(LayoutHelper.createFrame(40, 40, Gravity.TOP | Gravity.RIGHT, 0, 3, 68, 0));
+            previousTrackButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.RIGHT, 0, 5, 108, 0));
+            nextTrackButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.RIGHT, 0, 5, 32, 0));
 
             closeButton.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            closeButton.setPadding(dp(13), dp(13), dp(13), dp(13));
-            closeButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerClose) & 0x19ffffff, 1, dp(19)));
-            closeButton.setLayoutParams(LayoutHelper.createFrame(48, 48, Gravity.RIGHT | Gravity.TOP, 0, 0, 5, 0));
+            closeButton.setPadding(dp(8), dp(8), dp(8), dp(8));
+            closeButton.setBackground(Theme.createSelectorDrawable(getThemedColor(Theme.key_inappPlayerClose) & 0x19ffffff, 1, dp(16)));
+            closeButton.setLayoutParams(LayoutHelper.createFrame(32, 40, Gravity.RIGHT | Gravity.TOP, 0, 3, 0, 0));
             closeButton.setContentDescription(getString(R.string.AccDescrClosePlayer));
 
             for (int i = 0; i < 2; i++) {
@@ -1389,7 +1400,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                     title.setGravity(Gravity.BOTTOM | Gravity.LEFT);
                     title.setTextColor(getThemedColor(Theme.key_inappPlayerTitle));
                     title.setTypeface(Typeface.DEFAULT);
-                    title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13);
+                    title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
                     title.setEllipsize(TextUtils.TruncateAt.END);
                 }
                 TextView subtitle = i == 0 ? subtitleTextView.getTextView() : subtitleTextView.getNextTextView();
@@ -1397,13 +1408,13 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                     subtitle.setGravity(Gravity.TOP | Gravity.LEFT);
                     subtitle.setTextColor(getThemedColor(Theme.key_inappPlayerClose));
                     subtitle.setTypeface(AndroidUtilities.bold());
-                    subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 10);
+                    subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12);
                     subtitle.setEllipsize(TextUtils.TruncateAt.END);
                 }
             }
             titleTextView.setTag(Theme.key_inappPlayerTitle);
-            titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 21, Gravity.LEFT | Gravity.TOP, 51, 2, (isSideMenued ? 64 : 0) + 51, 0));
-            subtitleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 14, Gravity.LEFT | Gravity.TOP, 51, 24, (isSideMenued ? 64 : 0) + 51, 0));
+            titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 23, Gravity.LEFT | Gravity.TOP, 66, 4, (isSideMenued ? 64 : 0) + 148, 0));
+            subtitleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 18, Gravity.LEFT | Gravity.TOP, 66, 28, (isSideMenued ? 64 : 0) + 148, 0));
         } else if (style == STYLE_AUDIO_PLAYER || style == STYLE_LIVE_LOCATION) {
             selector.setBackground(Theme.getSelectorDrawable(false));
             frameLayout.setBackgroundColor(0);
@@ -1419,6 +1430,13 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 playButton.setImageDrawable(playPauseDrawable);
                 titleTextView.setTranslationX(0);
                 subtitleTextView.setTranslationX(0);
+                previousTrackButton.setVisibility(VISIBLE);
+                nextTrackButton.setVisibility(VISIBLE);
+                mediaModeButton.setVisibility(VISIBLE);
+                previousTrackButton.setEnabled(true);
+                nextTrackButton.setEnabled(true);
+                previousTrackButton.setAlpha(1f);
+                nextTrackButton.setAlpha(1f);
             }
 
             subtitleTextView.setVisibility(GONE);
@@ -1445,13 +1463,17 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 36, Gravity.LEFT | Gravity.TOP, 35 + 16, 0, (isSideMenued ? 64 : 0) + 36, 0));
                 closeButton.setVisibility(GONE);
             } else if (style == STYLE_AUDIO_PLAYER) {
-                playButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.LEFT, 3, 0, 0, 0));
-                titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 36, Gravity.LEFT | Gravity.TOP, 37, 0, (isSideMenued ? 64 : 0) + 36, 0));
+                previousTrackButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.LEFT, 0, 3, 0, 0));
+                playButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.LEFT, 36, 3, 0, 0));
+                nextTrackButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.LEFT, 72, 3, 0, 0));
+                titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 44, Gravity.LEFT | Gravity.TOP, 112, 0, (isSideMenued ? 64 : 0) + 72, 0));
                 createPlaybackSpeedButton();
                 if (playbackSpeedButton != null) {
                     playbackSpeedButton.setVisibility(VISIBLE);
                     playbackSpeedButton.setTag(1);
+                    playbackSpeedButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.RIGHT, 0, 3, 36, 0));
                 }
+                closeButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.RIGHT, 0, 3, 0, 0));
                 closeButton.setContentDescription(getString(R.string.AccDescrClosePlayer));
             } else {
                 playButton.setLayoutParams(LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.LEFT, 8, 0, 0, 0));
@@ -1554,8 +1576,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 playbackSpeedButton.setTag(null);
             }
         }
-        mediaPageIndicator.setVisibility(isMediaPlayerStyle(style) ? VISIBLE : GONE);
-        mediaPageIndicator.invalidate();
+        updateMediaModeButton();
     }
 
     @Override
@@ -1713,9 +1734,6 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     @Override
     public void onSpotifyStateChanged(SpotifyController.State state) {
         spotifyState = state;
-        if (state != null && state.playing && !isTelegramAudioPlaying()) {
-            currentMediaPage = MEDIA_PAGE_SPOTIFY;
-        }
         checkMediaPlayer(false);
     }
 
@@ -1741,17 +1759,6 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
         } else if (id == NotificationCenter.messagePlayingDidStart || id == NotificationCenter.messagePlayingPlayStateChanged || id == NotificationCenter.messagePlayingDidReset || id == NotificationCenter.didEndCall) {
             if (currentStyle == STYLE_CONNECTING_GROUP_CALL || currentStyle == STYLE_ACTIVE_GROUP_CALL || currentStyle == STYLE_INACTIVE_GROUP_CALL) {
                 checkCall(false);
-            }
-            if (id == NotificationCenter.messagePlayingDidStart && getTelegramPlayerMessage() != null) {
-                currentMediaPage = MEDIA_PAGE_TELEGRAM;
-            } else if (id == NotificationCenter.messagePlayingPlayStateChanged) {
-                if (isTelegramAudioPlaying()) {
-                    currentMediaPage = MEDIA_PAGE_TELEGRAM;
-                } else if (spotifyState != null && spotifyState.playing) {
-                    currentMediaPage = MEDIA_PAGE_SPOTIFY;
-                }
-            } else if (id == NotificationCenter.messagePlayingDidReset && spotifyState != null) {
-                currentMediaPage = MEDIA_PAGE_SPOTIFY;
             }
             checkMediaPlayer(false);
         } else if (id == NotificationCenter.didStartedCall || id == NotificationCenter.groupCallUpdated || id == NotificationCenter.groupCallVisibilityChanged) {
@@ -1834,7 +1841,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
 
     public int getStyleHeight() {
         if (isMediaPlayerStyle(currentStyle)) {
-            return 48;
+            return 72;
         }
         return currentStyle == STYLE_INACTIVE_GROUP_CALL ? 48 : 36;
     }
@@ -2064,20 +2071,20 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
 
     private boolean switchMediaPage(int targetPage, boolean animate) {
         if (targetPage == currentMediaPage) {
+            updateMediaModeButton();
             return false;
         }
         if (targetPage == MEDIA_PAGE_SPOTIFY && spotifyState == null) {
+            updateMediaModeButton();
             return false;
         }
         if (targetPage == MEDIA_PAGE_TELEGRAM && getTelegramPlayerMessage() == null) {
+            updateMediaModeButton();
             return false;
         }
         int direction = targetPage > currentMediaPage ? 1 : -1;
         currentMediaPage = targetPage;
         checkMediaPlayer(false);
-        if (mediaPageIndicator != null) {
-            mediaPageIndicator.invalidate();
-        }
         if (animate) {
             animateMediaPageChange(direction);
         }
@@ -2086,7 +2093,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
 
     private void animateMediaPageChange(int direction) {
         float offset = dp(direction > 0 ? 18 : -18);
-        View[] contentViews = new View[] { playButton, titleTextView, subtitleTextView, closeButton, playbackSpeedButton, silentButton };
+        View[] contentViews = new View[] { spotifyCoverView, previousTrackButton, playButton, nextTrackButton, titleTextView, subtitleTextView, closeButton, playbackSpeedButton, silentButton };
         for (View view : contentViews) {
             if (view == null || view.getVisibility() != VISIBLE) {
                 continue;
@@ -2096,6 +2103,24 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             view.setAlpha(0.65f);
             view.animate().translationX(0).alpha(1f).setDuration(160).start();
         }
+    }
+
+    private void updateMediaModeButton() {
+        if (mediaModeButton == null) {
+            return;
+        }
+        if (!isMediaPlayerStyle(currentStyle)) {
+            mediaModeButton.setVisibility(GONE);
+            return;
+        }
+
+        boolean switchToSpotify = currentMediaPage == MEDIA_PAGE_TELEGRAM;
+        boolean targetAvailable = switchToSpotify ? spotifyState != null : getTelegramPlayerMessage() != null;
+        mediaModeButton.setText(getString(switchToSpotify ? R.string.SpotifyMode : R.string.AudioFilesMode));
+        mediaModeButton.setContentDescription(getString(switchToSpotify ? R.string.SwitchToSpotifyMode : R.string.SwitchToAudioFilesMode));
+        mediaModeButton.setEnabled(targetAvailable);
+        mediaModeButton.setAlpha(targetAvailable ? 1f : 0.45f);
+        mediaModeButton.setVisibility(VISIBLE);
     }
 
     private void checkMediaPlayer(boolean create) {
@@ -2118,9 +2143,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             checkSpotify(create);
         }
 
-        if (mediaPageIndicator != null) {
-            mediaPageIndicator.invalidate();
-        }
+        updateMediaModeButton();
     }
 
     private SpotifyController.State renderedSpotifyState;
@@ -2287,11 +2310,20 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 ? SpotifyController.Command.PAUSE
                 : SpotifyController.Command.PLAY;
         playButton.setEnabled(SpotifyController.getInstance().canSend(toggleCommand));
+        previousTrackButton.setEnabled(SpotifyController.getInstance().canSend(SpotifyController.Command.PREVIOUS));
+        nextTrackButton.setEnabled(SpotifyController.getInstance().canSend(SpotifyController.Command.NEXT));
+        previousTrackButton.setAlpha(previousTrackButton.isEnabled() ? 1f : 0.45f);
+        nextTrackButton.setAlpha(nextTrackButton.isEnabled() ? 1f : 0.45f);
 
         if (!newState.equals(renderedSpotifyState) || previousStyle != STYLE_SPOTIFY_PLAYER) {
             renderedSpotifyState = newState;
             titleTextView.setText(newState.songName, animateContent);
             subtitleTextView.setText(newState.author, animateContent);
+            if (newState.coverUrl.isEmpty()) {
+                spotifyCoverView.clearImage();
+            } else {
+                spotifyCoverView.setImage(newState.coverUrl, "52_52", null);
+            }
             setContentDescription(newState.author + " - " + newState.songName);
         }
     }

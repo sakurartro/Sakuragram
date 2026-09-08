@@ -88,6 +88,18 @@ public final class SpotifyServerSettings {
         return endpoint(SpotifyApiConfig.PAUSE_PATH);
     }
 
+    /** Adds a per-track cache key while keeping the configured cover endpoint stable. */
+    @NonNull
+    public static String getCoverUrl(@NonNull String author, @NonNull String songName) {
+        String url = endpoint(SpotifyApiConfig.COVER_PATH);
+        if (url.isEmpty() || author.isEmpty() && songName.isEmpty()) {
+            return "";
+        }
+        String trackKey = Integer.toHexString((author + '\n' + songName).hashCode());
+        return url + (url.contains("?") ? "&" : "?")
+                + "filename=spotify_cover_" + trackKey + ".jpg&v=" + trackKey;
+    }
+
     @NonNull
     public static String getNextUrl() {
         return endpoint(SpotifyApiConfig.NEXT_PATH);

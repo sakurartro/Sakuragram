@@ -7,8 +7,9 @@ public final class SpotifyApiConfig {
     public static final String STATUS_PATH = "/spotify/current";
     public static final String PLAY_PATH = "/spotify/play";
     public static final String PAUSE_PATH = "/spotify/pause";
-    public static final String NEXT_PATH = "";
-    public static final String PREVIOUS_PATH = "";
+    public static final String COVER_PATH = "/spotify/current/image";
+    public static final String NEXT_PATH = "/spotify/next";
+    public static final String PREVIOUS_PATH = "/spotify/back";
 
     private SpotifyApiConfig() {}
 }

@@ -13,6 +13,10 @@
     <string name="SpotifyServer">Сервер Spotify</string>
     <string name="SpotifyServerAddressHint">IP, имя хоста или HTTP(S)-адрес. Если порт не указан, используется 8000.</string>
     <string name="SpotifyServerAddressInvalid">Введите корректный HTTP- или HTTPS-адрес сервера</string>
+    <string name="SpotifyMode">Spotify</string>
+    <string name="AudioFilesMode">Аудиофайлы</string>
+    <string name="SwitchToSpotifyMode">Переключиться на Spotify</string>
+    <string name="SwitchToAudioFilesMode">Переключиться на аудиофайлы</string>
     <string name="Chat">Чат</string>
     <string name="NameOrder">Сортировка имён</string>
     <string name="FirstLast">Имя Фамилия</string>

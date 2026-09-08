@@ -42,11 +42,13 @@ public final class SpotifyController {
         public final boolean playing;
         public final String author;
         public final String songName;
+        public final String coverUrl;
 
         private State(boolean playing, @NonNull String author, @NonNull String songName) {
             this.playing = playing;
             this.author = author;
             this.songName = songName;
+            this.coverUrl = SpotifyServerSettings.getCoverUrl(author, songName);
         }
 
         @Override
@@ -59,12 +61,13 @@ public final class SpotifyController {
             }
             return playing == state.playing
                     && author.equals(state.author)
-                    && songName.equals(state.songName);
+                    && songName.equals(state.songName)
+                    && coverUrl.equals(state.coverUrl);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(playing, author, songName);
+            return Objects.hash(playing, author, songName, coverUrl);
         }
     }
 
